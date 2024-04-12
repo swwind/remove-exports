@@ -1,30 +1,61 @@
 use crate::remove_exports;
 
 macro_rules! run {
-  ($src:expr, [$($rms:expr),*], $ept:expr) => {
-    assert_eq!(remove_exports($src, vec![$($rms),*].into_iter().map(|x| x.to_string()).collect()).trim(), $ept)
+  ($src:expr, $rms:expr, $ept:expr) => {{
+    let removes = $rms.into_iter().map(|x| x.to_string()).collect();
+    assert_eq!(remove_exports($src, removes).trim(), $ept)
+  }};
+}
+
+macro_rules! run_empty {
+  ($src:expr,  $rms:expr) => {
+    run!($src, $rms, "")
   };
 }
 
+macro_rules! run_test {
+  ($name:expr) => {{
+    let source = include_str!(concat!("../tests/", $name, "/input.js"));
+    let expected = include_str!(concat!("../tests/", $name, "/output.js"));
+    let removes = include_str!(concat!("../tests/", $name, "/removes.txt"));
+    let removes = removes
+      .split_terminator('\n')
+      .map(|x| x.to_string())
+      .collect();
+
+    assert_eq!(remove_exports(source, removes), expected,);
+  }};
+}
+
 #[test]
-fn remove_export_default() {
-  run!("export default 114514;", ["default"], "");
-  run!("export default ident;", ["default"], "");
+fn remove_export_default_expr() {
+  run_empty!("export default 2333;", ["default"]);
+  run_empty!("export default foobar;", ["default"]);
+  run_empty!("export default (class {});", ["default"]);
+  run_empty!("export default (class foo {});", ["default"]);
+  run_empty!("export default (function () {});", ["default"]);
+  run_empty!("export default (function foo() {});", ["default"]);
+}
 
-  run!("export default class {}", ["default"], "");
-  run!("export default class John {}", ["default"], "");
-
-  run!("export default function () {}", ["default"], "");
-  run!("export default function foo() {}", ["default"], "");
-  run!("export default function* () {}", ["default"], "");
-  run!("export default function* foo() {}", ["default"], "");
+#[test]
+fn remove_export_default_decl() {
+  run_empty!("export default class {}", ["default"]);
+  run_empty!("export default class foo {}", ["default"]);
+  run_empty!("export default function () {}", ["default"]);
+  run_empty!("export default function* () {}", ["default"]);
+  run_empty!("export default function foo() {}", ["default"]);
+  run_empty!("export default function* foo() {}", ["default"]);
+  run_empty!("export default async function () {}", ["default"]);
+  run_empty!("export default async function* () {}", ["default"]);
+  run_empty!("export default async function foo() {}", ["default"]);
+  run_empty!("export default async function* foo() {}", ["default"]);
 }
 
 #[test]
 fn remove_export_decl() {
-  run!("export var foo = null", ["foo"], "");
-  run!("export let foo = null", ["foo"], "");
-  run!("export const foo = null", ["foo"], "");
+  run_empty!("export var foo = null", ["foo"]);
+  run_empty!("export let foo = null", ["foo"]);
+  run_empty!("export const foo = null", ["foo"]);
 
   run!(
     "export const foo = 1, bar = 2",

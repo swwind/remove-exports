@@ -15,7 +15,7 @@ where
   T: std::hash::Hash + Eq,
 {
   fn count(&mut self, key: T) {
-    *self.counts.entry(key).or_insert(0) += 1;
+    self.counts.entry(key).and_modify(|x| *x += 1).or_insert(1);
   }
 
   fn get(&self, key: &T) -> u32 {
