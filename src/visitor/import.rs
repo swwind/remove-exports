@@ -8,50 +8,100 @@ use swc_ecmascript::{
   visit::Visit,
 };
 
+use super::CountVisitor;
+
 #[derive(Default, Debug)]
 pub struct ImportVisitor {
-  decls: HashSet<Id>,
-  exports: HashMap<String, HashSet<Id>>,
+  decl_refs: HashMap<Id, HashSet<Id>>,
+  global_refs: HashSet<Id>,
+  export_refs: HashMap<String, HashSet<Id>>,
 }
 
 impl ImportVisitor {
-  fn register_decl(&mut self, id: Id) {
-    self.decls.insert(id);
+  fn insert_decl_refs(&mut self, id: Id, refs: HashSet<Id>) {
+    self
+      .decl_refs
+      .entry(id)
+      .or_insert(HashSet::new())
+      .extend(refs)
   }
 
-  fn register_export(&mut self, name: String, id: Id) {
+  fn insert_decls_refs(&mut self, ids: &[Id], refs: &HashSet<Id>) {
+    for id in ids {
+      self.insert_decl_refs(id.clone(), refs.clone());
+    }
+  }
+
+  fn insert_global_refs(&mut self, refs: HashSet<Id>) {
+    self.global_refs.extend(refs);
+  }
+
+  fn insert_export_ref(&mut self, name: String, id: Id) {
     self
-      .exports
+      .export_refs
       .entry(name)
       .or_insert_with(|| HashSet::new())
       .insert(id);
   }
+
+  fn insert_export_ident(&mut self, ident: &Ident) {
+    self.insert_export_ref(ident.sym.to_string(), ident.to_id());
+  }
+
+  fn insert_export_refs(&mut self, name: String, refs: HashSet<Id>) {
+    self
+      .export_refs
+      .entry(name)
+      .or_insert_with(|| HashSet::new())
+      .extend(refs);
+  }
+
+  fn insert_default_refs(&mut self, refs: HashSet<Id>) {
+    self.insert_export_refs("default".to_string(), refs);
+  }
+
+  fn register_decl(&mut self, id: Id) {
+    self.decl_refs.entry(id).or_insert(HashSet::new());
+  }
 }
 
-fn find_pat_idents(n: &Pat) -> Vec<Id> {
-  match n {
-    Pat::Ident(i) => vec![i.to_id()],
-    Pat::Array(a) => a
-      .elems
-      .iter()
-      .flatten()
-      .flat_map(|e| find_pat_idents(e))
-      .collect(),
-    Pat::Rest(r) => find_pat_idents(&r.arg),
-    Pat::Object(o) => o
-      .props
-      .iter()
-      .flat_map(|i| match i {
-        ObjectPatProp::KeyValue(k) => find_pat_idents(&k.value),
-        ObjectPatProp::Assign(a) => vec![a.key.id.to_id()],
-        ObjectPatProp::Rest(r) => find_pat_idents(&r.arg),
-      })
-      .collect(),
-    Pat::Assign(a) => find_pat_idents(&a.left),
+impl ImportVisitor {
+  fn find_idents(&mut self, n: &Pat) -> Vec<Id> {
+    match n {
+      Pat::Ident(i) => vec![i.to_id()],
+      Pat::Array(a) => a
+        .elems
+        .iter()
+        .flatten()
+        .flat_map(|x| self.find_idents(x))
+        .collect(),
+      Pat::Rest(r) => self.find_idents(&r.arg),
+      Pat::Object(o) => o
+        .props
+        .iter()
+        .flat_map(|x| match x {
+          ObjectPatProp::KeyValue(kv) => self.find_idents(&kv.value),
+          ObjectPatProp::Assign(ass) => {
+            if let Some(value) = &ass.value {
+              let refs = CountVisitor::count(value);
+              self.insert_decl_refs(ass.key.to_id(), refs);
+            }
+            return vec![ass.key.to_id()];
+          }
+          ObjectPatProp::Rest(rest) => self.find_idents(&rest.arg),
+        })
+        .collect(),
+      Pat::Assign(ass) => {
+        let ids = self.find_idents(&ass.left);
+        let refs = CountVisitor::count(&ass.right);
+        self.insert_decls_refs(&ids, &refs);
+        ids
+      }
 
-    // ???
-    Pat::Invalid(_) => vec![],
-    Pat::Expr(_) => vec![],
+      // ignore
+      Pat::Invalid(_) => panic!("invalid code"),
+      Pat::Expr(_) => panic!("invalid code"),
+    }
   }
 }
 
@@ -78,50 +128,53 @@ impl Visit for ImportVisitor {
               }
             }
           }
+
           ModuleDecl::ExportDecl(decl) => match &decl.decl {
             // export class foo {}
             Decl::Class(c) => {
-              self.register_decl(c.ident.to_id());
-              self.register_export(c.ident.to_string(), c.ident.to_id());
+              let refs = CountVisitor::count(&c.class);
+              self.insert_decl_refs(c.ident.to_id(), refs);
+              self.insert_export_ident(&c.ident);
             }
             // export function foo {}
             // export function* foo {}
             Decl::Fn(f) => {
-              self.register_decl(f.ident.to_id());
-              self.register_export(f.ident.to_string(), f.ident.to_id());
+              let refs = CountVisitor::count(&f.function);
+              self.insert_decl_refs(f.ident.to_id(), refs);
+              self.insert_export_ident(&f.ident);
             }
             // export const foo = ...
             Decl::Var(v) => {
-              v.decls
-                .iter()
-                .flat_map(|x| find_pat_idents(&x.name))
-                .map(|x| Ident::from(x))
-                .for_each(|ident| {
-                  self.register_decl(ident.to_id());
-                  self.register_export(ident.to_string(), ident.to_id());
-                });
+              for decl in &v.decls {
+                let ids = self.find_idents(&decl.name);
+
+                let refs = match &decl.init {
+                  Some(init) => CountVisitor::count(init),
+                  None => HashSet::new(),
+                };
+                self.insert_decls_refs(&ids, &refs);
+
+                for id in ids {
+                  let ident = Ident::from(id);
+                  self.insert_export_ident(&ident);
+                }
+              }
             }
 
             // invalid
-            Decl::Using(_) => {}
-            Decl::TsInterface(_) => {}
-            Decl::TsTypeAlias(_) => {}
-            Decl::TsEnum(_) => {}
-            Decl::TsModule(_) => {}
+            Decl::Using(_) => panic!("invalid code"),
+            Decl::TsInterface(_) => panic!("invalid code"),
+            Decl::TsTypeAlias(_) => panic!("invalid code"),
+            Decl::TsEnum(_) => panic!("invalid code"),
+            Decl::TsModule(_) => panic!("invalid code"),
           },
 
           ModuleDecl::ExportDefaultDecl(decl) => match &decl.decl {
             // export default class {}
             // export default class foo {}
             DefaultDecl::Class(c) => {
-              if let Some(ident) = &c.ident {
-                self.register_decl(ident.to_id());
-                self
-                  .exports
-                  .entry("default".to_string())
-                  .or_insert_with(|| HashSet::new())
-                  .insert(ident.to_id());
-              }
+              let refs = CountVisitor::count(&c.class);
+              self.insert_default_refs(refs);
             }
 
             // export default function () {}
@@ -133,22 +186,21 @@ impl Visit for ImportVisitor {
             // export default async function foo() {}
             // export default async function* foo() {}
             DefaultDecl::Fn(f) => {
-              if let Some(ident) = &f.ident {
-                self.register_decl(ident.to_id());
-                self
-                  .exports
-                  .entry("default".to_string())
-                  .or_insert_with(|| HashSet::new())
-                  .insert(ident.to_id());
-              }
+              let refs = CountVisitor::count(&f.function);
+              self.insert_default_refs(refs);
             }
 
             // invalid
-            DefaultDecl::TsInterfaceDecl(_) => {}
+            DefaultDecl::TsInterfaceDecl(_) => panic!("invalid code"),
           },
+
           // export default foo;
           // do nothing;
-          ModuleDecl::ExportDefaultExpr(_) => {}
+          ModuleDecl::ExportDefaultExpr(expr) => {
+            let refs = CountVisitor::count(&expr.expr);
+            self.insert_default_refs(refs);
+          }
+
           // export * from "source";
           // do nothing;
           ModuleDecl::ExportAll(_) => {}
@@ -171,7 +223,7 @@ impl Visit for ImportVisitor {
                         ModuleExportName::Str(s) => s.value.to_string(),
                       };
 
-                      self.register_export(exported_name, orig_id);
+                      self.insert_export_ref(exported_name, orig_id);
                     }
                     // export { foo }
                     else {
@@ -180,9 +232,10 @@ impl Visit for ImportVisitor {
                         ModuleExportName::Str(_) => panic!("invalid code"),
                       };
 
-                      self.register_export(ident.to_string(), ident.to_id());
+                      self.insert_export_ident(&ident);
                     }
                   }
+
                   // invalid
                   ExportSpecifier::Namespace(_) => panic!("invalid code"),
                   ExportSpecifier::Default(_) => panic!("invalid code"),
@@ -200,20 +253,56 @@ impl Visit for ImportVisitor {
           ModuleDecl::TsNamespaceExport(_) => {}
         }
       }
-      ModuleItem::Stmt(stmt) => {
-        if let Stmt::Decl(decl) = stmt {
+
+      ModuleItem::Stmt(stmt) => match stmt {
+        Stmt::Decl(decl) => {
           match decl {
-            Decl::Class(c) => self.register_decl(c.ident.to_id()),
-            Decl::Fn(f) => self.register_decl(f.ident.to_id()),
+            Decl::Class(c) => {
+              let refs = CountVisitor::count(&c.class);
+              self.insert_decl_refs(c.ident.to_id(), refs);
+            }
+            Decl::Fn(f) => {
+              let refs = CountVisitor::count(&f.function);
+              self.insert_decl_refs(f.ident.to_id(), refs);
+            }
             Decl::Var(v) => {
-              for d in &v.decls {
-                self.visit_pat(&d.name)
+              for decl in &v.decls {
+                let ids = self.find_idents(&decl.name);
+                let refs = match &decl.init {
+                  Some(init) => CountVisitor::count(init),
+                  None => HashSet::new(),
+                };
+                self.insert_decls_refs(&ids, &refs);
               }
             }
-            _ => {}
+
+            // invalid
+            Decl::Using(_) => panic!("invalid code"),
+            Decl::TsInterface(_) => panic!("invalid code"),
+            Decl::TsTypeAlias(_) => panic!("invalid code"),
+            Decl::TsEnum(_) => panic!("invalid code"),
+            Decl::TsModule(_) => panic!("invalid code"),
           }
         }
-      }
+        Stmt::Block(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Empty(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Debugger(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::With(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Return(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Labeled(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Break(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Continue(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::If(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Switch(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Throw(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Try(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::While(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::DoWhile(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::For(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::ForIn(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::ForOf(x) => self.insert_global_refs(CountVisitor::count(x)),
+        Stmt::Expr(x) => self.insert_global_refs(CountVisitor::count(x)),
+      },
     }
   }
 }

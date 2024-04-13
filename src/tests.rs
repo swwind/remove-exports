@@ -157,6 +157,19 @@ fn remove_export_names() {
 fn remove_infected_imports() {
   run!(
     r#"
+    const foo = 114;
+    const bar = 514;
+    const baz = [];
+    const a = baz || foo;
+    const b = baz || bar;
+    export { a, b };
+    "#,
+    ["a", "b"],
+    ""
+  );
+
+  run!(
+    r#"
     import { bar } from "source";
     export function foo() { bar; }
     "#,

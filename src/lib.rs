@@ -25,12 +25,9 @@ pub fn remove_exports(source: &str, exports: Vec<String>) -> String {
   let mut module = parser.parse_module().unwrap();
   // println!("{:?}", module);
 
-  let mut first = ImportVisitor::default();
-  module.visit_with(&mut first);
-  // println!("{:?}", first);
-
-  let mut counter = CountVisitor::default();
-  module.visit_with(&mut counter);
+  let mut import = ImportVisitor::default();
+  module.visit_with(&mut import);
+  println!("{:?}", import);
 
   module.visit_mut_with(&mut RemoveVisitor {
     removes: exports.into_iter().collect(),

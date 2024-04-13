@@ -1,37 +1,37 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use swc_ecmascript::{
-  ast::{FnDecl, Id, Ident},
-  visit::Visit,
+  ast::{Id, Ident},
+  visit::{Visit, VisitWith},
 };
 
-#[derive(Default, Debug)]
-struct Counter<T> {
-  counts: HashMap<T, u32>,
-}
-
-impl<T> Counter<T>
-where
-  T: std::hash::Hash + Eq,
-{
-  fn count(&mut self, key: T) {
-    self.counts.entry(key).and_modify(|x| *x += 1).or_insert(1);
-  }
-
-  fn get(&self, key: &T) -> u32 {
-    *self.counts.get(key).unwrap_or(&0)
-  }
-}
-
+/// Analyze Every Id
 #[derive(Default, Debug)]
 pub struct CountVisitor {
-  counter: Counter<Id>,
+  pub set: HashSet<Id>,
+}
+
+impl CountVisitor {
+  pub fn count<T>(expr: &T) -> HashSet<Id>
+  where
+    T: VisitWith<Self>,
+  {
+    let mut counter = Self::default();
+    expr.visit_with(&mut counter);
+    counter.set
+  }
 }
 
 impl Visit for CountVisitor {
   fn visit_ident(&mut self, n: &Ident) {
-    self.counter.count(n.to_id());
+    self.set.insert(n.to_id());
   }
+}
 
-  fn visit_fn_decl(&mut self, n: &FnDecl) {}
+#[cfg(test)]
+mod tests {
+  #[test]
+  fn find_count() {
+    assert_eq!(1 + 1, 2);
+  }
 }
