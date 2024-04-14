@@ -14,8 +14,16 @@ use super::CountVisitor;
 pub struct ImportVisitor {
   pub decl_refs: HashMap<Id, HashSet<Id>>,
   pub global_refs: HashSet<Id>,
+
+  /// Must remove if said to be.
+  ///
+  /// `export const v = 233;`
   pub export_decls: HashMap<String, Id>,
-  pub export_default_refs: HashSet<Id>,
+
+  /// Just a reference, can be removed without change decl.
+  ///
+  /// `export { foo }`
+  pub export_refs: HashMap<String, HashSet<Id>>,
 }
 
 impl ImportVisitor {
@@ -42,13 +50,19 @@ impl ImportVisitor {
   }
 
   fn insert_export_decl_ident(&mut self, ident: &Ident) {
-    self
-      .export_decls
-      .insert(ident.sym.to_string(), ident.to_id());
+    self.insert_export_decl(ident.sym.to_string(), ident.to_id());
   }
 
-  fn insert_export_default_refs(&mut self, refs: HashSet<Id>) {
-    self.export_default_refs.extend(refs);
+  fn insert_export_refs(&mut self, name: String, refs: HashSet<Id>) {
+    self
+      .export_refs
+      .entry(name)
+      .or_insert_with(|| HashSet::new())
+      .extend(refs);
+  }
+
+  fn insert_export_refs_default(&mut self, refs: HashSet<Id>) {
+    self.insert_export_refs("default".to_string(), refs);
   }
 
   fn register_decl(&mut self, id: Id) {
@@ -167,10 +181,7 @@ impl Visit for ImportVisitor {
             // export default class foo {}
             DefaultDecl::Class(c) => {
               let refs = CountVisitor::count(&c.class);
-              if let Some(ident) = &c.ident {
-                self.register_decl(ident.to_id());
-              }
-              self.insert_export_default_refs(refs);
+              self.insert_export_refs_default(refs);
             }
 
             // export default function () {}
@@ -183,10 +194,7 @@ impl Visit for ImportVisitor {
             // export default async function* foo() {}
             DefaultDecl::Fn(f) => {
               let refs = CountVisitor::count(&f.function);
-              if let Some(ident) = &f.ident {
-                self.register_decl(ident.to_id());
-              }
-              self.insert_export_default_refs(refs);
+              self.insert_export_refs_default(refs);
             }
 
             // invalid
@@ -194,10 +202,9 @@ impl Visit for ImportVisitor {
           },
 
           // export default foo;
-          // do nothing;
           ModuleDecl::ExportDefaultExpr(expr) => {
             let refs = CountVisitor::count(&expr.expr);
-            self.insert_export_default_refs(refs);
+            self.insert_export_refs_default(refs);
           }
 
           // export * from "source";
@@ -210,29 +217,21 @@ impl Visit for ImportVisitor {
               for specifier in &name.specifiers {
                 match specifier {
                   ExportSpecifier::Named(name) => {
-                    // export { foo as bar }
-                    if let Some(exported) = &name.exported {
-                      let orig_id = match &name.orig {
-                        ModuleExportName::Ident(i) => i.to_id(),
-                        ModuleExportName::Str(_) => panic!("invalid code"),
-                      };
+                    let ident = match &name.orig {
+                      ModuleExportName::Ident(i) => i,
+                      ModuleExportName::Str(_) => panic!("invalid code"),
+                    };
 
-                      let exported_name = match exported {
-                        ModuleExportName::Ident(i) => i.sym.to_string(),
-                        ModuleExportName::Str(s) => s.value.to_string(),
-                      };
+                    let exported_name = match &name.exported {
+                      // export { foo as bar }
+                      Some(ModuleExportName::Ident(i)) => i.sym.to_string(),
+                      // export { foo as "bar" }
+                      Some(ModuleExportName::Str(s)) => s.value.to_string(),
+                      // export { foo }
+                      None => ident.sym.to_string(),
+                    };
 
-                      self.insert_export_decl(exported_name, orig_id);
-                    }
-                    // export { foo }
-                    else {
-                      let ident = match &name.orig {
-                        ModuleExportName::Ident(i) => i,
-                        ModuleExportName::Str(_) => panic!("invalid code"),
-                      };
-
-                      self.insert_export_decl_ident(&ident);
-                    }
+                    self.insert_export_refs(exported_name, HashSet::from([ident.to_id()]));
                   }
 
                   // invalid

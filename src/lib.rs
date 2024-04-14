@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+#[cfg(test)]
+mod test;
 mod visitor;
 
 use swc_common::{
@@ -38,18 +40,18 @@ pub fn remove_exports(source: &str, exports: Vec<String>) -> String {
     module.visit_mut_with(&mut resolver);
   });
 
-  println!("=============");
-  println!("before = {:?}", module);
+  // println!("=============");
+  // println!("before = {:?}", module);
 
   let mut import = ImportVisitor::default();
   module.visit_with(&mut import);
   println!("import = {:?}", import);
 
   let mut remove = RemoveVisitor::new(import, exports);
-  println!("remove = {:?}", remove);
+  // println!("remove = {:?}", remove);
   module.visit_mut_with(&mut remove);
 
-  println!("module = {:?}", module);
+  // println!("module = {:?}", module);
 
   // println!("{:?}", module);
 
@@ -65,6 +67,3 @@ pub fn remove_exports(source: &str, exports: Vec<String>) -> String {
   }
   String::from_utf8_lossy(&buf).to_string()
 }
-
-#[cfg(test)]
-mod tests;

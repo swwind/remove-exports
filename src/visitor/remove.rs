@@ -224,6 +224,10 @@ where
 
   fn discount(&mut self, key: &K, f: impl FnOnce(&K)) {
     println!("discount: {:?}", key);
+    if self.done.contains(key) {
+      return;
+    }
+
     if let Some(x) = self.map.get_mut(key) {
       if *x == 0 {
         // maybe this is force-removed
@@ -257,34 +261,43 @@ impl RemoveVisitor {
     for value in &imports.global_refs {
       ref_counts.count(value);
     }
-    for value in &imports.export_default_refs {
+    for (_, values) in &imports.export_refs {
+      for value in values {
+        ref_counts.count(value);
+      }
+    }
+    for (_, value) in &imports.export_decls {
       ref_counts.count(value);
     }
 
     // repeatly mark decls as should remove
     let mut queue = VecDeque::<Id>::new();
+
+    // force-remove
+    // export function foo() {}
     for (name, id) in &imports.export_decls {
       if removes.contains(name) {
-        if let Some((k, v)) = imports.decl_refs.get_key_value(id) {
-          ref_counts.mark(k);
-          for id in v {
-            if id != k {
-              ref_counts.discount(id, |id| queue.push_back(id.clone()));
-            }
-          }
-        }
-      }
-    }
-    if removes.contains(&"default".to_string()) {
-      for id in &imports.export_default_refs {
-        ref_counts.discount(id, |id| queue.push_back(id.clone()));
+        ref_counts.mark(id);
+        queue.push_back(id.clone());
       }
     }
 
-    while let Some(id) = queue.pop_front() {
-      if let Some(set) = imports.decl_refs.get(&id) {
-        for id in set {
-          ref_counts.discount(id, |id| queue.push_back(id.clone()));
+    // soft-remove
+    // export { foo }
+    for (name, ids) in &imports.export_refs {
+      if removes.contains(name) {
+        for id in ids {
+          ref_counts.discount(id, |id| queue.push_back(id.clone()))
+        }
+      }
+    }
+
+    while let Some(decl) = queue.pop_front() {
+      if let Some(ids) = imports.decl_refs.get(&decl) {
+        for id in ids {
+          if id != &decl {
+            ref_counts.discount(id, |id| queue.push_back(id.clone()));
+          }
         }
       }
     }

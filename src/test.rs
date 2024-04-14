@@ -180,7 +180,10 @@ fn remove_infected_imports() {
     export function foo() { bar; }
     "#,
     ["foo"],
-    "import { bar } from \"source\";\nbar;"
+    r#"
+    import { bar } from "source";
+    bar;
+    "#
   );
 
   run!(
@@ -189,7 +192,7 @@ fn remove_infected_imports() {
     export function foo(bar) { bar; }
     "#,
     ["foo"],
-    "import { bar } from \"source\";"
+    r#"import { bar } from "source";"#
   );
 
   run!(
@@ -198,7 +201,7 @@ fn remove_infected_imports() {
     export function foo() { var bar; bar = 2; }
     "#,
     ["foo"],
-    "import { bar } from \"source\";"
+    r#"import { bar } from "source";"#
   );
 
   run!(
@@ -207,7 +210,7 @@ fn remove_infected_imports() {
     export function foo() {}
     "#,
     ["foo"],
-    "import \"source\";"
+    r#"import "source";"#
   );
 
   run!(
@@ -216,7 +219,7 @@ fn remove_infected_imports() {
     export function foo() {}
     "#,
     ["foo"],
-    "import \"source\";"
+    r#"import "source";"#
   );
 }
 
@@ -266,13 +269,207 @@ fn remove_infected_decls() {
     ["foo"]
   );
 
-  run_empty!(
+  run!(
     r#"
     import { baka } from "source";
     const baz = (foo, bar) => baka(foo, bar);
     export const bar = (foo) => baz(bar, foo);
     export function foo() { bar(foo) }
     "#,
+    ["foo"],
+    r#"
+    import { baka } from "source";
+    const baz = (foo, bar)=>baka(foo, bar);
+    export const bar = (foo)=>baz(bar, foo);
+    "#
+  );
+}
+
+#[test]
+fn preserve_unrelated_code() {
+  run!(
+    r#"
+    import {} from "source";
+    export { foo };
+    "#,
+    ["foo"],
+    r#"
+    import "source";
+    "#
+  );
+
+  run_empty!(
+    r#"
+    import { foo } from "source";
+    export { foo };
+    "#,
     ["foo"]
+  );
+
+  run!(
+    r#"
+    import { foo } from "source";
+    foo();
+    export { foo };
+    "#,
+    ["foo"],
+    r#"
+    import { foo } from "source";
+    foo();
+    "#
+  );
+}
+
+#[test]
+fn recursive_references() {
+  run_empty!(
+    r#"
+    function bar() { foo() }
+    export function foo() { bar() }
+    "#,
+    ["foo"]
+  );
+  run!(
+    r#"
+    function bar() { foo() }
+    function foo() { bar() }
+    export { foo, bar }
+    "#,
+    ["foo"],
+    r#"
+    function bar() {
+      foo();
+    }
+    function foo() {
+      bar();
+    }
+    export { bar };
+    "#
+  );
+  run!(
+    r#"
+    export function bar() { foo(); }
+    export function foo() { bar(); }
+    "#,
+    ["foo"],
+    r#"
+    export function bar() {
+      foo();
+    }
+    "#
+  );
+
+  run!(
+    r#"
+    export default function bar() { foo(); }
+    function foo() { bar(); }
+    "#,
+    ["default"],
+    r#"
+    "#
+  );
+
+  run!(
+    r#"
+    export default function bar() { foo(); }
+    export function foo() { bar(); }
+    "#,
+    ["default"],
+    r#"
+    export function foo() {
+      bar();
+    }
+    "#
+  );
+}
+
+#[test]
+fn should_work_for_remix() {
+  run!(
+    r#"
+    import { useState } from "react";
+    import { useLoader } from "remix";
+    import { h } from "react/jsx-runtime";
+    import "./style.css";
+    import { db } from "~/database.ts";
+    import { add } from "@/utils";
+
+    const USER_ID = 114514;
+
+    export const loader = async () => {
+      add(114, 514);
+      return await db.getUser(USER_ID);
+    }
+
+    export const action = async () => {
+      return await db.deleteUser(USER_ID);
+    }
+
+    function Page(props) {
+      add(114, 514);
+      return h("div", null, [props.data]);
+    }
+
+    export default function () {
+      const loader = useLoader();
+      return h(Page, { data: loader }, null);
+    }
+    "#,
+    ["loader", "action"],
+    r#"
+    import { useState } from "react";
+    import { useLoader } from "remix";
+    import { h } from "react/jsx-runtime";
+    import "./style.css";
+    import { add } from "@/utils";
+    function Page(props) {
+      add(114, 514);
+      return h("div", null, [
+        props.data
+      ]);
+    }
+    export default function() {
+      const loader = useLoader();
+      return h(Page, {
+        data: loader
+      }, null);
+    }
+    "#
+  );
+}
+
+#[test]
+fn should_work_for_qwik() {
+  run!(
+    r#"
+    import { loader$, action$, component$, h } from "@builder-io/qwik";
+    import { database } from "sqlite";
+    const USER_ID = 114514;
+
+    export const useUser = loader$(async () => {
+      return await database.query(USER_ID);
+    });
+    export const useNextUser = action$(async () => {
+      return await database.query(USER_ID + 1);
+    });
+
+    export default component$(() => {
+      const user = useUser();
+      const next = useNextUser();
+      return h("div", null, [user, next]);
+    });
+    "#,
+    ["useUser", "useNextUser"],
+    r#"
+    import { component$, h } from "@builder-io/qwik";
+    export default component$(()=>{
+      const user = useUser();
+      const next = useNextUser();
+      return h("div", null, [
+        user,
+        next
+      ]);
+    });
+    "#
   );
 }
