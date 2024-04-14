@@ -12,7 +12,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/swwind/find-exports.git"
+    "url": "git+https://github.com/swwind/remove-exports.git"
   },
   "files": [
     "pkg",
