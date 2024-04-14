@@ -1,8 +1,6 @@
 # `@swwind/remove-exports`
 
-**Written in Rust and compiles into WASM, supports NodeJS and Browsers.**
-
-**This module is ESM only**
+**This module is ESM only, written in Rust and compiles into WASM, supports NodeJS and Browsers.**
 
 Remove specific named exports in a JS file, also removes non-used imports and declarations caused by removal.
 
