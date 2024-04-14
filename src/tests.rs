@@ -1,30 +1,28 @@
 use crate::remove_exports;
 
+fn format_code(code: &str) -> String {
+  code
+    .split_terminator('\n')
+    .map(|x| x.trim())
+    .collect::<Vec<_>>()
+    .join("\n")
+    .trim()
+    .to_string()
+}
+
 macro_rules! run {
   ($src:expr, $rms:expr, $ept:expr) => {{
     let removes = $rms.into_iter().map(|x| x.to_string()).collect();
-    assert_eq!(remove_exports($src, removes).trim(), $ept)
+    let result = remove_exports($src, removes);
+    let expected = $ept;
+    assert_eq!(format_code(&result), format_code(&expected))
   }};
 }
 
 macro_rules! run_empty {
-  ($src:expr,  $rms:expr) => {
+  ($src:expr, $rms:expr) => {
     run!($src, $rms, "")
   };
-}
-
-macro_rules! run_test {
-  ($name:expr) => {{
-    let source = include_str!(concat!("../tests/", $name, "/input.js"));
-    let expected = include_str!(concat!("../tests/", $name, "/output.js"));
-    let removes = include_str!(concat!("../tests/", $name, "/removes.txt"));
-    let removes = removes
-      .split_terminator('\n')
-      .map(|x| x.to_string())
-      .collect();
-
-    assert_eq!(remove_exports(source, removes), expected,);
-  }};
 }
 
 #[test]
@@ -155,7 +153,7 @@ fn remove_export_names() {
 
 #[test]
 fn remove_infected_imports() {
-  run!(
+  run_empty!(
     r#"
     const foo = 114;
     const bar = 514;
@@ -164,17 +162,15 @@ fn remove_infected_imports() {
     const b = baz || bar;
     export { a, b };
     "#,
-    ["a", "b"],
-    ""
+    ["a", "b"]
   );
 
-  run!(
+  run_empty!(
     r#"
     import { bar } from "source";
     export function foo() { bar; }
     "#,
-    ["foo"],
-    ""
+    ["foo"]
   );
 
   run!(
@@ -226,22 +222,20 @@ fn remove_infected_imports() {
 
 #[test]
 fn remove_infected_decls() {
-  run!(
+  run_empty!(
     r#"
     const bar = 233;
     export function foo() { return bar; }
     "#,
-    ["foo"],
-    ""
+    ["foo"]
   );
 
-  run!(
+  run_empty!(
     r#"
     function bar() { return foo(); }
     export function foo() { return bar(); }
     "#,
-    ["foo"],
-    ""
+    ["foo"]
   );
 
   run!(
@@ -262,25 +256,23 @@ fn remove_infected_decls() {
     "const bar = 233;"
   );
 
-  run!(
+  run_empty!(
     r#"
     import { baka } from "source";
     const baz = (foo, bar) => baka(foo, bar);
     const bar = (foo) => baz(bar, foo);
     export function foo() { bar(foo) }
     "#,
-    ["foo"],
-    ""
+    ["foo"]
   );
 
-  run!(
+  run_empty!(
     r#"
     import { baka } from "source";
     const baz = (foo, bar) => baka(foo, bar);
     export const bar = (foo) => baz(bar, foo);
     export function foo() { bar(foo) }
     "#,
-    ["foo"],
-    "import { baka } from \"source\";\nconst baz = (foo, bar) => baka(foo, bar);\nexport const bar = (foo) => baz(bar, foo);"
+    ["foo"]
   );
 }

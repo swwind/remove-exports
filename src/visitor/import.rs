@@ -5,16 +5,17 @@ use swc_ecmascript::{
     Decl, DefaultDecl, ExportSpecifier, Id, Ident, ImportSpecifier, ModuleDecl, ModuleExportName,
     ModuleItem, ObjectPatProp, Pat, Stmt,
   },
-  visit::Visit,
+  visit::{noop_visit_type, Visit},
 };
 
 use super::CountVisitor;
 
 #[derive(Default, Debug)]
 pub struct ImportVisitor {
-  decl_refs: HashMap<Id, HashSet<Id>>,
-  global_refs: HashSet<Id>,
-  export_refs: HashMap<String, HashSet<Id>>,
+  pub decl_refs: HashMap<Id, HashSet<Id>>,
+  pub global_refs: HashSet<Id>,
+  pub export_decls: HashMap<String, Id>,
+  pub export_default_refs: HashSet<Id>,
 }
 
 impl ImportVisitor {
@@ -22,7 +23,7 @@ impl ImportVisitor {
     self
       .decl_refs
       .entry(id)
-      .or_insert(HashSet::new())
+      .or_insert_with(|| HashSet::new())
       .extend(refs)
   }
 
@@ -36,32 +37,22 @@ impl ImportVisitor {
     self.global_refs.extend(refs);
   }
 
-  fn insert_export_ref(&mut self, name: String, id: Id) {
+  fn insert_export_decl(&mut self, name: String, id: Id) {
+    self.export_decls.insert(name, id);
+  }
+
+  fn insert_export_decl_ident(&mut self, ident: &Ident) {
     self
-      .export_refs
-      .entry(name)
-      .or_insert_with(|| HashSet::new())
-      .insert(id);
+      .export_decls
+      .insert(ident.sym.to_string(), ident.to_id());
   }
 
-  fn insert_export_ident(&mut self, ident: &Ident) {
-    self.insert_export_ref(ident.sym.to_string(), ident.to_id());
-  }
-
-  fn insert_export_refs(&mut self, name: String, refs: HashSet<Id>) {
-    self
-      .export_refs
-      .entry(name)
-      .or_insert_with(|| HashSet::new())
-      .extend(refs);
-  }
-
-  fn insert_default_refs(&mut self, refs: HashSet<Id>) {
-    self.insert_export_refs("default".to_string(), refs);
+  fn insert_export_default_refs(&mut self, refs: HashSet<Id>) {
+    self.export_default_refs.extend(refs);
   }
 
   fn register_decl(&mut self, id: Id) {
-    self.decl_refs.entry(id).or_insert(HashSet::new());
+    self.decl_refs.entry(id).or_insert_with(|| HashSet::new());
   }
 }
 
@@ -106,6 +97,8 @@ impl ImportVisitor {
 }
 
 impl Visit for ImportVisitor {
+  noop_visit_type!();
+
   fn visit_module_item(&mut self, n: &ModuleItem) {
     match n {
       ModuleItem::ModuleDecl(decl) => {
@@ -134,14 +127,14 @@ impl Visit for ImportVisitor {
             Decl::Class(c) => {
               let refs = CountVisitor::count(&c.class);
               self.insert_decl_refs(c.ident.to_id(), refs);
-              self.insert_export_ident(&c.ident);
+              self.insert_export_decl_ident(&c.ident);
             }
             // export function foo {}
             // export function* foo {}
             Decl::Fn(f) => {
               let refs = CountVisitor::count(&f.function);
               self.insert_decl_refs(f.ident.to_id(), refs);
-              self.insert_export_ident(&f.ident);
+              self.insert_export_decl_ident(&f.ident);
             }
             // export const foo = ...
             Decl::Var(v) => {
@@ -156,7 +149,7 @@ impl Visit for ImportVisitor {
 
                 for id in ids {
                   let ident = Ident::from(id);
-                  self.insert_export_ident(&ident);
+                  self.insert_export_decl_ident(&ident);
                 }
               }
             }
@@ -174,7 +167,10 @@ impl Visit for ImportVisitor {
             // export default class foo {}
             DefaultDecl::Class(c) => {
               let refs = CountVisitor::count(&c.class);
-              self.insert_default_refs(refs);
+              if let Some(ident) = &c.ident {
+                self.register_decl(ident.to_id());
+              }
+              self.insert_export_default_refs(refs);
             }
 
             // export default function () {}
@@ -187,7 +183,10 @@ impl Visit for ImportVisitor {
             // export default async function* foo() {}
             DefaultDecl::Fn(f) => {
               let refs = CountVisitor::count(&f.function);
-              self.insert_default_refs(refs);
+              if let Some(ident) = &f.ident {
+                self.register_decl(ident.to_id());
+              }
+              self.insert_export_default_refs(refs);
             }
 
             // invalid
@@ -198,7 +197,7 @@ impl Visit for ImportVisitor {
           // do nothing;
           ModuleDecl::ExportDefaultExpr(expr) => {
             let refs = CountVisitor::count(&expr.expr);
-            self.insert_default_refs(refs);
+            self.insert_export_default_refs(refs);
           }
 
           // export * from "source";
@@ -223,7 +222,7 @@ impl Visit for ImportVisitor {
                         ModuleExportName::Str(s) => s.value.to_string(),
                       };
 
-                      self.insert_export_ref(exported_name, orig_id);
+                      self.insert_export_decl(exported_name, orig_id);
                     }
                     // export { foo }
                     else {
@@ -232,7 +231,7 @@ impl Visit for ImportVisitor {
                         ModuleExportName::Str(_) => panic!("invalid code"),
                       };
 
-                      self.insert_export_ident(&ident);
+                      self.insert_export_decl_ident(&ident);
                     }
                   }
 
